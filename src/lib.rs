@@ -194,10 +194,12 @@ mod serde_impl {
 }
 
 #[cfg(feature = "rkyv")]
-pub struct NicheSnowflake;
+pub use rkyv_impl::{ArchivedOptionSnowflake, NicheSnowflake};
 
 #[cfg(feature = "rkyv")]
-const _: () = {
+mod rkyv_impl {
+    use super::*;
+
     use rkyv::{
         bytecheck::CheckBytes,
         with::{ArchiveWith, DeserializeWith, SerializeWith},
@@ -237,20 +239,68 @@ const _: () = {
         }
     }
 
-    use rkyv::niche::option_nonzero::ArchivedOptionNonZeroU64;
+    pub struct NicheSnowflake;
 
-    impl ArchiveWith<Option<Snowflake>> for NicheSnowflake {
-        type Archived = ArchivedOptionNonZeroU64;
-        type Resolver = ();
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[repr(transparent)]
+    pub struct ArchivedOptionSnowflake(u64);
+
+    impl fmt::Debug for ArchivedOptionSnowflake {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.get().fmt(f)
+        }
+    }
+
+    impl ArchivedOptionSnowflake {
+        #[inline(always)]
+        pub const fn is_none(&self) -> bool {
+            self.0 == 0
+        }
 
         #[inline(always)]
+        pub const fn is_some(&self) -> bool {
+            self.0 != 0
+        }
+
+        #[inline(always)]
+        pub const fn as_ref(&self) -> Option<&Snowflake> {
+            match self.is_some() {
+                true => Some(unsafe { core::mem::transmute(&self.0) }),
+                false => None,
+            }
+        }
+
+        #[inline(always)]
+        pub const fn get(&self) -> Option<Snowflake> {
+            match self.is_some() {
+                true => Some(unsafe { core::mem::transmute(self.0) }),
+                false => None,
+            }
+        }
+    }
+
+    impl PartialEq<Option<Snowflake>> for ArchivedOptionSnowflake {
+        fn eq(&self, other: &Option<Snowflake>) -> bool {
+            self.get().eq(other)
+        }
+    }
+
+    impl ArchiveWith<Option<Snowflake>> for NicheSnowflake {
+        type Archived = ArchivedOptionSnowflake;
+        type Resolver = ();
+
+        #[inline]
         unsafe fn resolve_with(
             field: &Option<Snowflake>,
             _pos: usize,
             _resolver: Self::Resolver,
             out: *mut Self::Archived,
         ) {
-            ArchivedOptionNonZeroU64::resolve_from_option(field.map(|sf| sf.0), out as _);
+            let (_, fo) = rkyv::out_field!(out.0);
+            fo.write(match field {
+                Some(sf) => sf.to_u64(),
+                None => 0,
+            })
         }
     }
 
@@ -261,16 +311,16 @@ const _: () = {
         }
     }
 
-    impl<D: Fallible + ?Sized> DeserializeWith<ArchivedOptionNonZeroU64, Option<Snowflake>, D> for NicheSnowflake {
+    impl<D: Fallible + ?Sized> DeserializeWith<ArchivedOptionSnowflake, Option<Snowflake>, D> for NicheSnowflake {
         #[inline(always)]
         fn deserialize_with(
-            field: &ArchivedOptionNonZeroU64,
+            field: &ArchivedOptionSnowflake,
             _deserializer: &mut D,
         ) -> Result<Option<Snowflake>, D::Error> {
-            Ok(field.as_ref().map(|x| Snowflake(*x)))
+            Ok(field.get())
         }
     }
-};
+}
 
 #[cfg(feature = "schemars")]
 mod schema_impl {
