@@ -13,7 +13,7 @@ itoa = { optional = true, version = "1" }
 rkyv = { optional = true, version = "0.7", default-features = false, features = ["validation"] }
 schemars = { optional = true, version = "0.8" }
 timestamp = { optional = true, version = "0.2", package = "iso8601-timestamp" }
-rusqlite = { optional = true, version = "0.30", default-features = false }
+rusqlite = { optional = true, version = "0.31", default-features = false }
 postgres-types = { optional = true, version = "0.2", default-features = false }
 bytes = { optional = true, version = "1", default-features = false }
 
