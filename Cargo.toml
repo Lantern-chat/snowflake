@@ -23,5 +23,7 @@ serde_json = "1"
 serde_derive = "1"
 
 [features]
-pg = ["postgres-types", "bytes"]
-default = ["itoa", "serde"]
+std = []
+generator = ["std"]
+pg = ["postgres-types", "bytes", "std"]
+default = ["itoa", "serde", "generator"]

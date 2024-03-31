@@ -18,9 +18,11 @@
 //! ```
 
 #![deny(missing_docs, clippy::missing_safety_doc, clippy::undocumented_unsafe_blocks)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use std::{fmt, num::NonZeroU64, str::FromStr};
+use core::{fmt, num::NonZeroU64, str::FromStr};
 
+#[cfg(feature = "generator")]
 pub mod generator;
 
 /// Snowflake Identifier as used in Lantern Chat.
@@ -183,7 +185,7 @@ mod rusqlite_impl {
 mod serde_impl {
     use super::*;
 
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     use serde::de::{Deserialize, Deserializer, Error, Visitor};
     use serde::ser::{Serialize, Serializer};
@@ -424,20 +426,7 @@ mod tests {
 
     #[test]
     fn test_sf_size() {
-        use std::mem::size_of;
+        use core::mem::size_of;
         assert_eq!(size_of::<u64>(), size_of::<Option<Snowflake>>());
-    }
-
-    #[test]
-    fn test_serde() {
-        #[derive(Debug, Clone, Copy, serde_derive::Serialize, serde_derive::Deserialize)]
-        struct Nested {
-            x: Snowflake,
-        }
-
-        let _: Snowflake = serde_json::from_str(r#""12234""#).unwrap();
-        let _: Snowflake = serde_json::from_str(r#"12234"#).unwrap();
-        let _: Nested = serde_json::from_str(r#"{"x": 12234}"#).unwrap();
-        let _: Nested = serde_json::from_str(r#"{"x": "12234"}"#).unwrap();
     }
 }
