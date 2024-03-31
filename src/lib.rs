@@ -1,63 +1,108 @@
+//! Snowflake identifiers as used in Lantern Chat.
+//!
+//! Snowflake IDs are 64-bit unsigned integers that are guaranteed to be unique
+//! within a given system. They are composed of a 42-bit timestamp, a 10-bit system ID,
+//! and a 12-bit incrementing value.
+//!
+//! The timestamp is often the number of milliseconds since an arbitrary epoch,
+//! ensuring that it won't fill up for a long time.
+//!
+//! The system ID is a unique identifier for the system generating the Snowflake.
+//!
+//! # Layout
+//!
+//! ```text
+//! |------------------------------------------|----------|------------|
+//! |             42-bit Timestamp             |  10b ID  |  12b INCR  |
+//! |------------------------------------------|----------|------------|
+//! ```
+
+#![deny(missing_docs, clippy::missing_safety_doc, clippy::undocumented_unsafe_blocks)]
+
 use std::{fmt, num::NonZeroU64, str::FromStr};
 
 pub mod generator;
 
+/// Snowflake Identifier as used in Lantern Chat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Snowflake(pub NonZeroU64);
 
 impl Snowflake {
-    /// Generate the simplest valid Snowflake
+    /// Generate the simplest valid Snowflake, the value `1`.
     #[inline(always)]
     pub const fn null() -> Snowflake {
+        // SAFETY: Guaranteed to be non-zero by definition.
         Snowflake(unsafe { NonZeroU64::new_unchecked(1) })
     }
 
+    /// Returns the timestamp bits of the Snowflake.
     #[inline]
     pub const fn raw_timestamp(&self) -> u64 {
         self.to_u64() >> 22
     }
 
+    /// Returns the ID bits of the Snowflake, which typically represents
+    /// the originating system the Snowflake was generated on.
     #[inline]
     pub const fn id(&self) -> u16 {
         // 10 bits in the middle, above the incr
         (self.to_u64() >> 12) as u16 & 0x3FF
     }
 
+    /// Returns the increment bits of the Snowflake.
     #[inline]
     pub const fn incr(&self) -> u16 {
         // lowest 12 bits
         self.to_u64() as u16 & 0xFFF
     }
 
+    /// Returns the Snowflake as a 64-bit unsigned integer.
     #[inline(always)]
     pub const fn to_u64(self) -> u64 {
         self.0.get()
     }
 
+    /// Returns the Snowflake as a 64-bit signed integer.
     #[inline(always)]
     pub const fn to_i64(self) -> i64 {
-        unsafe { std::mem::transmute(self.to_u64()) }
+        self.to_u64() as i64
     }
 
     /// Snowflake set to the max Signed 64-bit value, what PostgreSQL uses for `bigint`
     #[inline(always)]
     pub const fn max_safe_value() -> Snowflake {
+        // SAFETY: Guaranteed to be non-zero.
         Snowflake(unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) })
     }
 }
 
 impl Snowflake {
+    /// Assemble a Snowflake from the given timestamp, ID, and increment.
+    ///
+    /// # Safety
+    ///
+    /// Any of the given parameters must be non-zero.
     #[inline(always)]
-    pub(crate) const fn from_parts(ts: u64, id: u64, incr: u64) -> Snowflake {
-        Snowflake(unsafe { NonZeroU64::new_unchecked((ts << 22) | (id << 12) | incr) })
+    pub(crate) const unsafe fn from_parts(ts: u64, id: u64, incr: u64) -> Snowflake {
+        let value = (ts << 22) | (id << 12) | incr;
+
+        debug_assert!(value != 0, "Snowflake value is zero");
+
+        Snowflake(NonZeroU64::new_unchecked(value))
     }
 
     /// Create a valid Snowflake from the given unix timestamp in milliseconds.
+    ///
+    /// This sets the ID to `0` and the increment to `1`.
+    ///
+    /// This can be used as a sentinel value for database queries.
     #[inline]
     pub const fn from_unix_ms(epoch: u64, ms: u64) -> Option<Snowflake> {
         let Some(ms) = ms.checked_sub(epoch) else { return None };
-        Some(Snowflake::from_parts(ms, 0, 1))
+
+        // SAFETY: Increment is always 1, ensuring non-zero
+        Some(unsafe { Snowflake::from_parts(ms, 0, 1) })
     }
 }
 
@@ -239,8 +284,19 @@ mod rkyv_impl {
         }
     }
 
+    /// Marker type for `Option<Snowflake>` to use a niche for `None`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// pub struct MyStruct {
+    ///     #[with(snowflake::NicheSnowflake)]
+    ///     id: Option<Snowflake>, // uses a niche for None, saving 8 bytes
+    /// }
+    /// ````
     pub struct NicheSnowflake;
 
+    /// Niche-optmized `Option<Snowflake>` for use with rkyv.
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     #[repr(transparent)]
     pub struct ArchivedOptionSnowflake(u64);
@@ -252,27 +308,33 @@ mod rkyv_impl {
     }
 
     impl ArchivedOptionSnowflake {
+        /// Returns `true` if the option is `None`.
         #[inline(always)]
         pub const fn is_none(&self) -> bool {
             self.0 == 0
         }
 
+        /// Returns `true` if the option is `Some`.
         #[inline(always)]
         pub const fn is_some(&self) -> bool {
             self.0 != 0
         }
 
+        /// Returns a reference to the inner value if the option is `Some`.
         #[inline(always)]
         pub const fn as_ref(&self) -> Option<&Snowflake> {
             match self.is_some() {
+                // SAFETY: The value is non-zero, so it's safe to transmute.
                 true => Some(unsafe { core::mem::transmute(&self.0) }),
                 false => None,
             }
         }
 
+        /// Returns the inner value if the option is `Some`.
         #[inline(always)]
         pub const fn get(&self) -> Option<Snowflake> {
             match self.is_some() {
+                // SAFETY: The value is non-zero, so it's safe to transmute.
                 true => Some(unsafe { core::mem::transmute(self.0) }),
                 false => None,
             }
