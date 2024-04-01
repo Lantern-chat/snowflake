@@ -303,6 +303,15 @@ mod rkyv_impl {
     #[repr(transparent)]
     pub struct ArchivedOptionSnowflake(u64);
 
+    impl<C: ?Sized> CheckBytes<C> for ArchivedOptionSnowflake {
+        type Error = <u64 as CheckBytes<C>>::Error;
+
+        #[inline(always)]
+        unsafe fn check_bytes<'a>(value: *const Self, context: &mut C) -> Result<&'a Self, Self::Error> {
+            CheckBytes::<C>::check_bytes(value as *const u64, context).map(|_| &*value)
+        }
+    }
+
     impl fmt::Debug for ArchivedOptionSnowflake {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             self.get().fmt(f)
