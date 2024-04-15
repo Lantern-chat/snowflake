@@ -31,11 +31,22 @@ pub mod generator;
 pub struct Snowflake(pub NonZeroU64);
 
 impl Snowflake {
+    /// Create a new Snowflake from the given 64-bit unsigned integer without checking
+    /// whether the value is non-zero. This results in undefined behaviour if the value is zero.
+    ///
+    /// # Safety
+    ///
+    /// The value must not be zero.
+    #[inline(always)]
+    pub const unsafe fn from_u64_unchecked(value: u64) -> Snowflake {
+        Snowflake(NonZeroU64::new_unchecked(value))
+    }
+
     /// Generate the simplest valid Snowflake, the value `1`.
     #[inline(always)]
     pub const fn null() -> Snowflake {
         // SAFETY: Guaranteed to be non-zero by definition.
-        Snowflake(unsafe { NonZeroU64::new_unchecked(1) })
+        unsafe { Snowflake::from_u64_unchecked(1) }
     }
 
     /// Returns the timestamp bits of the Snowflake.
@@ -75,7 +86,7 @@ impl Snowflake {
     #[inline(always)]
     pub const fn max_safe_value() -> Snowflake {
         // SAFETY: Guaranteed to be non-zero.
-        Snowflake(unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) })
+        unsafe { Snowflake::from_u64_unchecked(i64::MAX as u64) }
     }
 }
 
@@ -91,7 +102,7 @@ impl Snowflake {
 
         debug_assert!(value != 0, "Snowflake value is zero");
 
-        Snowflake(NonZeroU64::new_unchecked(value))
+        Snowflake::from_u64_unchecked(value)
     }
 
     /// Create a valid Snowflake from the given unix timestamp in milliseconds.
@@ -167,7 +178,7 @@ mod rusqlite_impl {
     impl FromSql for Snowflake {
         fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
             match value {
-                ValueRef::Integer(i) if i != 0 => unsafe { Ok(Snowflake(NonZeroU64::new_unchecked(i as u64))) },
+                ValueRef::Integer(i) if i != 0 => unsafe { Ok(Snowflake::from_u64_unchecked(i as u64)) },
                 ValueRef::Integer(_) => Err(FromSqlError::OutOfRange(0)),
                 _ => Err(FromSqlError::InvalidType),
             }
