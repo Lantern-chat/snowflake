@@ -10,15 +10,17 @@ publish = false
 crossbeam-utils = { version = "0.8", default-features = false }
 serde = { optional = true, version = "1", default-features = false }
 itoa = { optional = true, version = "1" }
-rkyv = { optional = true, version = "0.7", default-features = false, features = ["validation"] }
+rkyv_07 = { optional = true, package = "rkyv", version = "0.7", default-features = false, features = ["validation", "size_32"] }
+rkyv_08 = { optional = true, package = "rkyv", version = "0.8.0-alpha.3", default-features = false, features = ["bytecheck"] }
 schemars = { optional = true, version = "0.8" }
 timestamp = { optional = true, version = "0.2", package = "iso8601-timestamp" }
-rusqlite = { optional = true, version = "0.31", default-features = false }
+rusqlite = { optional = true, version = "0.32", default-features = false }
 postgres-types = { optional = true, version = "0.2", default-features = false }
 bytes = { optional = true, version = "1", default-features = false }
 
 [dev-dependencies]
-rkyv = { version = "0.7", features = ["validation"] }
+rkyv_07 = { package = "rkyv", version = "0.7", features = ["validation", "size_32"] }
+rkyv_08 = { package = "rkyv", version = "0.8.0-alpha.3" }
 serde_json = "1"
 serde_derive = "1"
 
@@ -26,4 +28,4 @@ serde_derive = "1"
 std = []
 generator = ["std"]
 pg = ["postgres-types", "bytes", "std"]
-default = ["itoa", "serde", "generator"]
+default = ["itoa", "serde", "generator", "rkyv_08", "pg", "rusqlite"]

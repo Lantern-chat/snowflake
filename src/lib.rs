@@ -178,6 +178,7 @@ mod rusqlite_impl {
     impl FromSql for Snowflake {
         fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
             match value {
+                // SAFETY: The value is verified non-zero by the branch
                 ValueRef::Integer(i) if i != 0 => unsafe { Ok(Snowflake::from_u64_unchecked(i as u64)) },
                 ValueRef::Integer(_) => Err(FromSqlError::OutOfRange(0)),
                 _ => Err(FromSqlError::InvalidType),
@@ -251,14 +252,292 @@ mod serde_impl {
     }
 }
 
-#[cfg(feature = "rkyv")]
-pub use rkyv_impl::{ArchivedOptionSnowflake, NicheSnowflake};
+#[cfg(feature = "rkyv_08")]
+pub use rkyv_08_impl::{ArchivedOptionSnowflake, ArchivedSnowflake, NicheSnowflake};
 
-#[cfg(feature = "rkyv")]
-mod rkyv_impl {
+#[cfg(feature = "rkyv_08")]
+mod rkyv_08_impl {
     use super::*;
 
-    use rkyv::{
+    use rkyv_08::{
+        bytecheck::CheckBytes,
+        place::Initialized,
+        rancor::{Fallible, Source},
+        rend::{u64_le, NonZeroU64_le},
+        traits::CopyOptimization,
+        with::{ArchiveWith, DeserializeWith, SerializeWith},
+        Archive, Deserialize, Place, Serialize,
+    };
+
+    /// Archived Snowflake for use with rkyv, represented as a 64-bit little-endian unsigned integer.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv_08::Portable)]
+    #[rkyv(crate = rkyv_08)]
+    #[repr(transparent)]
+    pub struct ArchivedSnowflake(pub NonZeroU64_le);
+
+    impl ArchivedSnowflake {
+        /// Returns the Snowflake as a 64-bit unsigned integer.
+        pub const fn to_i64(self) -> i64 {
+            self.0.get() as i64
+        }
+    }
+
+    impl fmt::Display for ArchivedSnowflake {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            Snowflake::from(*self).fmt(f)
+        }
+    }
+
+    impl PartialEq<Snowflake> for ArchivedSnowflake {
+        #[inline(always)]
+        fn eq(&self, other: &Snowflake) -> bool {
+            self.0 == other.0
+        }
+    }
+
+    impl PartialEq<ArchivedSnowflake> for Snowflake {
+        #[inline(always)]
+        fn eq(&self, other: &ArchivedSnowflake) -> bool {
+            self.0 == other.0
+        }
+    }
+
+    impl From<Snowflake> for ArchivedSnowflake {
+        #[inline(always)]
+        fn from(sf: Snowflake) -> Self {
+            ArchivedSnowflake(NonZeroU64_le::from_native(sf.0))
+        }
+    }
+
+    impl From<ArchivedSnowflake> for Snowflake {
+        #[inline(always)]
+        fn from(sf: ArchivedSnowflake) -> Self {
+            Snowflake(sf.0.to_native())
+        }
+    }
+
+    // SAFETY: ArchivedSnowflake is repr(transparent) over NonZeroU64_le, which is
+    // also `Initialized``
+    unsafe impl Initialized for ArchivedSnowflake {}
+
+    impl Archive for Snowflake {
+        type Archived = ArchivedSnowflake;
+        type Resolver = ();
+
+        // NOTE: This lint is currently bugged, waiting on
+        // https://github.com/rust-lang/rust-clippy/pull/12672
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        const COPY_OPTIMIZATION: CopyOptimization<Self> = unsafe { CopyOptimization::enable() };
+
+        #[inline(always)]
+        fn resolve(&self, _: Self::Resolver, out: rkyv_08::Place<Self::Archived>) {
+            out.write(ArchivedSnowflake(NonZeroU64_le::from(self.0)));
+        }
+    }
+
+    impl<S: Fallible + ?Sized> Serialize<S> for Snowflake {
+        #[inline(always)]
+        fn serialize(&self, _: &mut S) -> Result<Self::Resolver, S::Error> {
+            Ok(())
+        }
+    }
+
+    impl<D: Fallible + ?Sized> Deserialize<Snowflake, D> for Snowflake {
+        #[inline(always)]
+        fn deserialize(&self, _: &mut D) -> Result<Snowflake, D::Error> {
+            Ok(*self)
+        }
+    }
+
+    // SAFETY: ArchivedSnowflake is repr(transparent) over NonZeroU64_le
+    unsafe impl<C> CheckBytes<C> for ArchivedSnowflake
+    where
+        C: Fallible + ?Sized,
+        <C as Fallible>::Error: Source,
+    {
+        #[inline(always)]
+        unsafe fn check_bytes<'a>(value: *const Self, context: &mut C) -> Result<(), C::Error> {
+            CheckBytes::<C>::check_bytes(value as *const NonZeroU64_le, context)
+        }
+    }
+
+    /// Marker type for `Option<Snowflake>` to use a niche for `None`, that is
+    /// it uses a zeroed value to represent `None`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// pub struct MyStruct {
+    ///     #[with(snowflake::NicheSnowflake)]
+    ///     id: Option<Snowflake>, // uses a niche for None, saving 8 bytes
+    /// }
+    /// ````
+    pub struct NicheSnowflake;
+
+    /// Niche-optmized `Option<Snowflake>` for use with rkyv.
+    ///
+    /// Actually closed to `Option<ArchivedSnowflake>`, due to endianess constraints.
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv_08::Portable)]
+    #[rkyv(crate = rkyv_08)]
+    #[repr(transparent)]
+    pub struct ArchivedOptionSnowflake(pub u64_le);
+
+    /// SAFETY: ArchivedOptionSnowflake is repr(transparent) over u64_le, which is `Initialized`
+    unsafe impl Initialized for ArchivedOptionSnowflake {}
+
+    impl PartialEq<Option<ArchivedSnowflake>> for ArchivedOptionSnowflake {
+        #[inline(always)]
+        fn eq(&self, other: &Option<ArchivedSnowflake>) -> bool {
+            self.get().eq(other)
+        }
+    }
+
+    impl PartialEq<ArchivedOptionSnowflake> for Option<ArchivedSnowflake> {
+        #[inline(always)]
+        fn eq(&self, other: &ArchivedOptionSnowflake) -> bool {
+            self.eq(&other.get())
+        }
+    }
+
+    impl PartialEq<Option<Snowflake>> for ArchivedOptionSnowflake {
+        #[inline(always)]
+        fn eq(&self, other: &Option<Snowflake>) -> bool {
+            match (self.get(), other) {
+                (Some(a), Some(b)) => a == *b,
+                (None, None) => true,
+                _ => false,
+            }
+        }
+    }
+
+    impl PartialEq<ArchivedOptionSnowflake> for Option<Snowflake> {
+        #[inline(always)]
+        fn eq(&self, other: &ArchivedOptionSnowflake) -> bool {
+            match (self, other.get()) {
+                (Some(a), Some(b)) => *a == b,
+                (None, None) => true,
+                _ => false,
+            }
+        }
+    }
+
+    impl ArchivedOptionSnowflake {
+        /// Returns `true` if the option is `None`.
+        #[inline(always)]
+        pub const fn is_none(&self) -> bool {
+            self.get().is_none()
+        }
+
+        /// Returns `true` if the option is `Some`.
+        #[inline(always)]
+        pub const fn is_some(&self) -> bool {
+            self.get().is_some()
+        }
+
+        /// Returns a reference to the inner value if the option is `Some`.
+        #[inline(always)]
+        pub const fn as_ref(&self) -> Option<&ArchivedSnowflake> {
+            match self.is_some() {
+                true => {
+                    // SAFETY: The value is non-zero, so it's safe to transmute.
+                    Some(unsafe { core::mem::transmute::<&ArchivedOptionSnowflake, &ArchivedSnowflake>(self) })
+                }
+                false => None,
+            }
+        }
+
+        /// Returns the inner value if the option is `Some`.
+        #[inline(always)]
+        pub const fn get(self) -> Option<ArchivedSnowflake> {
+            // SAFETY: Niche optimization guarantees this works
+            unsafe { core::mem::transmute(self) }
+        }
+    }
+
+    impl ArchiveWith<Option<Snowflake>> for NicheSnowflake {
+        type Archived = ArchivedOptionSnowflake;
+        type Resolver = ();
+
+        #[inline]
+        fn resolve_with(field: &Option<Snowflake>, _: Self::Resolver, out: Place<Self::Archived>) {
+            out.write(ArchivedOptionSnowflake(match field {
+                Some(sf) => u64_le::from_native(sf.to_u64()),
+                None => u64_le::from_native(0),
+            }))
+        }
+    }
+
+    impl<S: Fallible + ?Sized> SerializeWith<Option<Snowflake>, S> for NicheSnowflake {
+        #[inline(always)]
+        fn serialize_with(_: &Option<Snowflake>, _: &mut S) -> Result<Self::Resolver, S::Error> {
+            Ok(())
+        }
+    }
+
+    impl<D: Fallible + ?Sized> DeserializeWith<ArchivedOptionSnowflake, Option<Snowflake>, D> for NicheSnowflake {
+        #[inline(always)]
+        fn deserialize_with(
+            field: &ArchivedOptionSnowflake,
+            _deserializer: &mut D,
+        ) -> Result<Option<Snowflake>, D::Error> {
+            Ok(field.get().map(From::from))
+        }
+    }
+
+    impl<D: Fallible + ?Sized> DeserializeWith<ArchivedOptionSnowflake, Option<ArchivedSnowflake>, D>
+        for NicheSnowflake
+    {
+        #[inline(always)]
+        fn deserialize_with(
+            field: &ArchivedOptionSnowflake,
+            _deserializer: &mut D,
+        ) -> Result<Option<ArchivedSnowflake>, D::Error> {
+            Ok(field.get())
+        }
+    }
+
+    #[cfg(feature = "pg")]
+    mod pg_impl {
+        use super::*;
+
+        use std::error::Error;
+
+        use bytes::BytesMut;
+        use postgres_types::{accepts, to_sql_checked, IsNull, ToSql, Type};
+
+        impl ToSql for ArchivedSnowflake {
+            #[inline]
+            fn to_sql(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+                self.to_i64().to_sql(ty, out)
+            }
+
+            accepts!(INT8);
+            to_sql_checked!();
+        }
+    }
+
+    #[cfg(feature = "rusqlite")]
+    mod rusqlite_impl {
+        use super::*;
+
+        use rusqlite::types::{ToSql, ToSqlOutput};
+
+        impl ToSql for ArchivedSnowflake {
+            fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+                Ok(ToSqlOutput::Owned(self.to_i64().into()))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "rkyv_07")]
+pub use rkyv_07_impl::{ArchivedOptionSnowflake, NicheSnowflake};
+
+#[cfg(feature = "rkyv_07")]
+mod rkyv_07_impl {
+    use super::*;
+
+    use rkyv_07::{
         bytecheck::CheckBytes,
         with::{ArchiveWith, DeserializeWith, SerializeWith},
         Archive, Deserialize, Fallible, Serialize,
@@ -380,7 +659,7 @@ mod rkyv_impl {
             _resolver: Self::Resolver,
             out: *mut Self::Archived,
         ) {
-            let (_, fo) = rkyv::out_field!(out.0);
+            let (_, fo) = rkyv_07::out_field!(out.0);
             fo.write(match field {
                 Some(sf) => sf.to_u64(),
                 None => 0,
