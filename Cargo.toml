@@ -28,4 +28,6 @@ serde_derive = "1"
 std = []
 generator = ["std"]
 pg = ["postgres-types", "bytes", "std"]
+rkyv_07 = ["dep:rkyv_07"]
+rkyv_08 = ["dep:rkyv_08"]
 default = ["itoa", "serde", "generator", "rkyv_08", "pg", "rusqlite"]
