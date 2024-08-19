@@ -261,12 +261,12 @@ mod rkyv_08_impl {
 
     use rkyv_08::{
         bytecheck::CheckBytes,
-        place::Initialized,
+        place::{Initialized, Place},
         rancor::{Fallible, Source},
         rend::{u64_le, NonZeroU64_le},
         traits::CopyOptimization,
         with::{ArchiveWith, DeserializeWith, SerializeWith},
-        Archive, Deserialize, Place, Serialize,
+        Archive, Deserialize, Serialize,
     };
 
     /// Archived Snowflake for use with rkyv, represented as a 64-bit little-endian unsigned integer.
@@ -330,7 +330,7 @@ mod rkyv_08_impl {
         const COPY_OPTIMIZATION: CopyOptimization<Self> = unsafe { CopyOptimization::enable() };
 
         #[inline(always)]
-        fn resolve(&self, _: Self::Resolver, out: rkyv_08::Place<Self::Archived>) {
+        fn resolve(&self, _: Self::Resolver, out: Place<Self::Archived>) {
             out.write(ArchivedSnowflake(NonZeroU64_le::from(self.0)));
         }
     }
