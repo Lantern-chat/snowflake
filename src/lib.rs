@@ -252,28 +252,26 @@ mod serde_impl {
     }
 }
 
-#[cfg(feature = "rkyv_08")]
-pub use rkyv_08_impl::{ArchivedOptionSnowflake, ArchivedSnowflake, NicheSnowflake};
+#[cfg(feature = "rkyv")]
+pub use rkyv_impl::{ArchivedOptionSnowflake, ArchivedSnowflake, NicheSnowflake};
 
-#[cfg(feature = "rkyv_08")]
-mod rkyv_08_impl {
+#[cfg(feature = "rkyv")]
+mod rkyv_impl {
     use super::*;
 
-    use rkyv_08::{
+    use rkyv::{
         bytecheck::CheckBytes,
         place::{Initialized, Place},
         rancor::{Fallible, Source},
-        rend::{u64_le, NonZeroU64_le},
         traits::CopyOptimization,
         with::{ArchiveWith, DeserializeWith, SerializeWith},
-        Archive, Deserialize, Serialize,
+        Archive, Archived, Deserialize, Serialize,
     };
 
     /// Archived Snowflake for use with rkyv, represented as a 64-bit little-endian unsigned integer.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv_08::Portable)]
-    #[rkyv(crate = rkyv_08)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv::Portable)]
     #[repr(transparent)]
-    pub struct ArchivedSnowflake(pub NonZeroU64_le);
+    pub struct ArchivedSnowflake(pub Archived<NonZeroU64>);
 
     impl ArchivedSnowflake {
         /// Returns the Snowflake as a 64-bit unsigned integer.
@@ -305,7 +303,7 @@ mod rkyv_08_impl {
     impl From<Snowflake> for ArchivedSnowflake {
         #[inline(always)]
         fn from(sf: Snowflake) -> Self {
-            ArchivedSnowflake(NonZeroU64_le::from_native(sf.0))
+            ArchivedSnowflake(<Archived<NonZeroU64>>::from_native(sf.0))
         }
     }
 
@@ -327,11 +325,13 @@ mod rkyv_08_impl {
         // NOTE: This lint is currently bugged, waiting on
         // https://github.com/rust-lang/rust-clippy/pull/12672
         #[allow(clippy::undocumented_unsafe_blocks)]
-        const COPY_OPTIMIZATION: CopyOptimization<Self> = unsafe { CopyOptimization::enable() };
+        const COPY_OPTIMIZATION: CopyOptimization<Self> =
+            // if NonZeroU64 is copy optimized, then Snowflake is copy optimized
+            unsafe { CopyOptimization::enable_if(<NonZeroU64 as Archive>::COPY_OPTIMIZATION.is_enabled()) };
 
         #[inline(always)]
         fn resolve(&self, _: Self::Resolver, out: Place<Self::Archived>) {
-            out.write(ArchivedSnowflake(NonZeroU64_le::from(self.0)));
+            out.write(ArchivedSnowflake(<Archived<NonZeroU64>>::from_native(self.0)));
         }
     }
 
@@ -342,10 +342,10 @@ mod rkyv_08_impl {
         }
     }
 
-    impl<D: Fallible + ?Sized> Deserialize<Snowflake, D> for Snowflake {
+    impl<D: Fallible + ?Sized> Deserialize<Snowflake, D> for ArchivedSnowflake {
         #[inline(always)]
         fn deserialize(&self, _: &mut D) -> Result<Snowflake, D::Error> {
-            Ok(*self)
+            Ok(Snowflake(self.0.to_native()))
         }
     }
 
@@ -357,7 +357,7 @@ mod rkyv_08_impl {
     {
         #[inline(always)]
         unsafe fn check_bytes<'a>(value: *const Self, context: &mut C) -> Result<(), C::Error> {
-            CheckBytes::<C>::check_bytes(value as *const NonZeroU64_le, context)
+            CheckBytes::<C>::check_bytes(value as *const Archived<NonZeroU64>, context)
         }
     }
 
@@ -366,7 +366,9 @@ mod rkyv_08_impl {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// # use snowflake::Snowflake;
+    /// #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
     /// pub struct MyStruct {
     ///     #[with(snowflake::NicheSnowflake)]
     ///     id: Option<Snowflake>, // uses a niche for None, saving 8 bytes
@@ -377,10 +379,9 @@ mod rkyv_08_impl {
     /// Niche-optmized `Option<Snowflake>` for use with rkyv.
     ///
     /// Actually closed to `Option<ArchivedSnowflake>`, due to endianess constraints.
-    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv_08::Portable)]
-    #[rkyv(crate = rkyv_08)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, rkyv::Portable)]
     #[repr(transparent)]
-    pub struct ArchivedOptionSnowflake(pub u64_le);
+    pub struct ArchivedOptionSnowflake(pub Archived<u64>);
 
     /// SAFETY: ArchivedOptionSnowflake is repr(transparent) over u64_le, which is `Initialized`
     unsafe impl Initialized for ArchivedOptionSnowflake {}
@@ -461,8 +462,8 @@ mod rkyv_08_impl {
         #[inline]
         fn resolve_with(field: &Option<Snowflake>, _: Self::Resolver, out: Place<Self::Archived>) {
             out.write(ArchivedOptionSnowflake(match field {
-                Some(sf) => u64_le::from_native(sf.to_u64()),
-                None => u64_le::from_native(0),
+                Some(sf) => <Archived<u64>>::from_native(sf.to_u64()),
+                None => <Archived<u64>>::from_native(0),
             }))
         }
     }
@@ -526,161 +527,6 @@ mod rkyv_08_impl {
             fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
                 Ok(ToSqlOutput::Owned(self.to_i64().into()))
             }
-        }
-    }
-}
-
-#[cfg(feature = "rkyv_07")]
-pub use rkyv_07_impl::{ArchivedOptionSnowflake, NicheSnowflake};
-
-#[cfg(feature = "rkyv_07")]
-mod rkyv_07_impl {
-    use super::*;
-
-    use rkyv_07::{
-        bytecheck::CheckBytes,
-        with::{ArchiveWith, DeserializeWith, SerializeWith},
-        Archive, Deserialize, Fallible, Serialize,
-    };
-
-    impl Archive for Snowflake {
-        type Archived = Snowflake;
-        type Resolver = ();
-
-        #[inline(always)]
-        unsafe fn resolve(&self, _pos: usize, _resolver: Self::Resolver, out: *mut Self::Archived) {
-            *out = *self;
-        }
-    }
-
-    impl<S: Fallible + ?Sized> Serialize<S> for Snowflake {
-        #[inline(always)]
-        fn serialize(&self, _serializer: &mut S) -> Result<Self::Resolver, S::Error> {
-            Ok(())
-        }
-    }
-
-    impl<D: Fallible + ?Sized> Deserialize<Snowflake, D> for Snowflake {
-        #[inline(always)]
-        fn deserialize(&self, _deserializer: &mut D) -> Result<Snowflake, D::Error> {
-            Ok(*self)
-        }
-    }
-
-    impl<C: ?Sized> CheckBytes<C> for Snowflake {
-        type Error = <NonZeroU64 as CheckBytes<C>>::Error;
-
-        #[inline(always)]
-        unsafe fn check_bytes<'a>(value: *const Self, context: &mut C) -> Result<&'a Self, Self::Error> {
-            CheckBytes::<C>::check_bytes(value as *const NonZeroU64, context).map(|_| &*value)
-        }
-    }
-
-    /// Marker type for `Option<Snowflake>` to use a niche for `None`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// pub struct MyStruct {
-    ///     #[with(snowflake::NicheSnowflake)]
-    ///     id: Option<Snowflake>, // uses a niche for None, saving 8 bytes
-    /// }
-    /// ````
-    pub struct NicheSnowflake;
-
-    /// Niche-optmized `Option<Snowflake>` for use with rkyv.
-    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    #[repr(transparent)]
-    pub struct ArchivedOptionSnowflake(u64);
-
-    impl<C: ?Sized> CheckBytes<C> for ArchivedOptionSnowflake {
-        type Error = <u64 as CheckBytes<C>>::Error;
-
-        #[inline(always)]
-        unsafe fn check_bytes<'a>(value: *const Self, context: &mut C) -> Result<&'a Self, Self::Error> {
-            CheckBytes::<C>::check_bytes(value as *const u64, context).map(|_| &*value)
-        }
-    }
-
-    impl fmt::Debug for ArchivedOptionSnowflake {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            self.get().fmt(f)
-        }
-    }
-
-    impl ArchivedOptionSnowflake {
-        /// Returns `true` if the option is `None`.
-        #[inline(always)]
-        pub const fn is_none(&self) -> bool {
-            self.0 == 0
-        }
-
-        /// Returns `true` if the option is `Some`.
-        #[inline(always)]
-        pub const fn is_some(&self) -> bool {
-            self.0 != 0
-        }
-
-        /// Returns a reference to the inner value if the option is `Some`.
-        #[inline(always)]
-        pub const fn as_ref(&self) -> Option<&Snowflake> {
-            match self.is_some() {
-                // SAFETY: The value is non-zero, so it's safe to transmute.
-                true => Some(unsafe { core::mem::transmute(&self.0) }),
-                false => None,
-            }
-        }
-
-        /// Returns the inner value if the option is `Some`.
-        #[inline(always)]
-        pub const fn get(&self) -> Option<Snowflake> {
-            match self.is_some() {
-                // SAFETY: The value is non-zero, so it's safe to transmute.
-                true => Some(unsafe { core::mem::transmute(self.0) }),
-                false => None,
-            }
-        }
-    }
-
-    impl PartialEq<Option<Snowflake>> for ArchivedOptionSnowflake {
-        fn eq(&self, other: &Option<Snowflake>) -> bool {
-            self.get().eq(other)
-        }
-    }
-
-    impl ArchiveWith<Option<Snowflake>> for NicheSnowflake {
-        type Archived = ArchivedOptionSnowflake;
-        type Resolver = ();
-
-        #[inline]
-        unsafe fn resolve_with(
-            field: &Option<Snowflake>,
-            _pos: usize,
-            _resolver: Self::Resolver,
-            out: *mut Self::Archived,
-        ) {
-            let (_, fo) = rkyv_07::out_field!(out.0);
-            fo.write(match field {
-                Some(sf) => sf.to_u64(),
-                None => 0,
-            })
-        }
-    }
-
-    impl<S: Fallible + ?Sized> SerializeWith<Option<Snowflake>, S> for NicheSnowflake {
-        #[inline(always)]
-        fn serialize_with(_field: &Option<Snowflake>, _serializer: &mut S) -> Result<Self::Resolver, S::Error> {
-            Ok(())
-        }
-    }
-
-    impl<D: Fallible + ?Sized> DeserializeWith<ArchivedOptionSnowflake, Option<Snowflake>, D> for NicheSnowflake {
-        #[inline(always)]
-        fn deserialize_with(
-            field: &ArchivedOptionSnowflake,
-            _deserializer: &mut D,
-        ) -> Result<Option<Snowflake>, D::Error> {
-            Ok(field.get())
         }
     }
 }
