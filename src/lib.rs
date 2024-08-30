@@ -260,10 +260,10 @@ mod rkyv_impl {
     use super::*;
 
     use rkyv::{
-        bytecheck::CheckBytes,
-        place::{Initialized, Place},
-        rancor::{Fallible, Source},
-        traits::CopyOptimization,
+        bytecheck::{CheckBytes, TupleStructCheckContext},
+        place::Place,
+        rancor::{Fallible, Source, Trace},
+        traits::{CopyOptimization, NoUndef},
         with::{ArchiveWith, DeserializeWith, SerializeWith},
         Archive, Archived, Deserialize, Serialize,
     };
@@ -315,8 +315,8 @@ mod rkyv_impl {
     }
 
     // SAFETY: ArchivedSnowflake is repr(transparent) over NonZeroU64_le, which is
-    // also `Initialized``
-    unsafe impl Initialized for ArchivedSnowflake {}
+    // also `NoUndef``
+    unsafe impl NoUndef for ArchivedSnowflake {}
 
     impl Archive for Snowflake {
         type Archived = ArchivedSnowflake;
@@ -383,8 +383,28 @@ mod rkyv_impl {
     #[repr(transparent)]
     pub struct ArchivedOptionSnowflake(pub Archived<u64>);
 
-    /// SAFETY: ArchivedOptionSnowflake is repr(transparent) over u64_le, which is `Initialized`
-    unsafe impl Initialized for ArchivedOptionSnowflake {}
+    /// SAFETY: ArchivedOptionSnowflake is repr(transparent) over Archived<u64>, which is also `NoUndef`
+    unsafe impl NoUndef for ArchivedOptionSnowflake {}
+
+    // SAFETY: ArchivedOptionSnowflake is repr(transparent) over Archived<u64>
+    unsafe impl<C> CheckBytes<C> for ArchivedOptionSnowflake
+    where
+        C: Fallible + ?Sized,
+        <C as Fallible>::Error: Source,
+    {
+        #[inline(always)]
+        unsafe fn check_bytes<'a>(value: *const Self, context: &mut C) -> Result<(), C::Error> {
+            CheckBytes::<C>::check_bytes(value as *const Archived<u64>, context).map_err(|e| {
+                <<C as Fallible>::Error as Trace>::trace(
+                    e,
+                    TupleStructCheckContext {
+                        tuple_struct_name: "ArchivedOptionSnowflake",
+                        field_index: 0,
+                    },
+                )
+            })
+        }
+    }
 
     impl PartialEq<Option<ArchivedSnowflake>> for ArchivedOptionSnowflake {
         #[inline(always)]
