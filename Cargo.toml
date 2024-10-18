@@ -12,7 +12,7 @@ serde = { optional = true, version = "1", default-features = false }
 itoa = { optional = true, version = "1" }
 rkyv = { optional = true, version = "0.8.0", default-features = false, features = ["bytecheck"] }
 schemars = { optional = true, version = "0.8" }
-timestamp = { optional = true, version = "0.3.0-rc.1", package = "iso8601-timestamp", default-features = false }
+timestamp = { optional = true, version = "0.3.0", package = "iso8601-timestamp", default-features = false }
 rusqlite = { optional = true, version = "0.32", default-features = false }
 postgres-types = { optional = true, version = "0.2", default-features = false }
 bytes = { optional = true, version = "1", default-features = false }
